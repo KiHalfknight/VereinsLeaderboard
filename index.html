@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vereins-Leaderboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f4f4; margin: 20px; max-width: 900px; margin: 20px auto; }
+        h1, h2 { color: #333; }
+        
+        /* Neuer Style für die Statistik-Boxen */
+        .stats-container {
+            display: flex;
+            gap: 20px; /* Abstand zwischen den Boxen */
+            margin-bottom: 20px;
+        }
+        .stat-box {
+            flex: 1; /* Beide Boxen gleich breit */
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .stat-box h3 { margin-top: 0; color: #0056a0; }
+        .stat-box p { font-size: 2.2em; font-weight: bold; color: #333; margin: 10px 0; }
+
+        table { width: 100%; border-collapse: collapse; background-color: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        th, td { padding: 12px; border: 1px solid #ddd; text-align: left; }
+        th { background-color: #0056a0; color: white; }
+        tr:nth-child(even) { background-color: #f9f9f9; }
+    </style>
+</head>
+<body>
+
+    <h1>🏆 Vereins-Statistik LSC Karlstadt</h1>
+
+    <div class="stats-container" id="stats-container">
+        <div class="stat-box"><h3>Lade...</h3></div>
+        <div class="stat-box"><h3>Lade...</h3></div>
+    </div>
+
+    <h2>Leaderboard (Top 20 All-Time)</h2>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Rang</th>
+                <th>Pilot</th>
+                <th>Distanz (km)</th>
+                <th>Datum</th>
+            </tr>
+        </thead>
+        <tbody id="leaderboard-body">
+            </tbody>
+    </table>
+
+    <script>
+        // HILFSFUNKTION: Formatiert 12345 zu "12.345"
+        function formatNumber(num) {
+            return new Intl.NumberFormat('de-DE').format(num);
+        }
+
+        // Warte, bis die ganze Seite geladen ist
+        document.addEventListener('DOMContentLoaded', () => {
+            
+            // -----------------------------------------
+            // 1. STATISTIKEN LADEN (NEU)
+            // -----------------------------------------
+            fetch('/api/stats')
+                .then(response => response.json())
+                .then(stats => {
+                    // 'stats' ist das Objekt: { allTime: 50000, currentYear: 12000, totalFlights: 150 }
+                    const statsContainer = document.getElementById('stats-container');
+                    
+                    // Das aktuelle Jahr für die Überschrift holen
+                    const currentYear = new Date().getFullYear(); 
+                    
+                    statsContainer.innerHTML = `
+                        <div class="stat-box">
+                            <h3>Gesamt-Kilometer (All-Time)</h3>
+                            <p>${formatNumber(stats.allTime)} km</p>
+                            <span>(Aus ${formatNumber(stats.totalFlights)} Flügen)</span>
+                        </div>
+                        <div class="stat-box">
+                            <h3>Gesamt-Kilometer (${currentYear})</h3>
+                            <p>${formatNumber(stats.currentYear)} km</p>
+                        </div>
+                    `;
+                })
+                .catch(error => {
+                    console.error("Fehler beim Laden der Stats:", error);
+                    document.getElementById('stats-container').innerHTML = '<p>Statistiken konnten nicht geladen werden.</p>';
+                });
+
+            // -----------------------------------------
+            // 2. LEADERBOARD LADEN (Wie gehabt)
+            // -----------------------------------------
+            fetch('/api/leaderboard')
+                .then(response => response.json())
+                .then(flights => { 
+                    const tableBody = document.getElementById('leaderboard-body');
+                    tableBody.innerHTML = ''; // Leere die Tabelle (falls da "Lade..." drin stünde)
+
+                    flights.forEach((flight, index) => {
+                        const row = document.createElement('tr');
+                        const distance = flight.contest ? Math.round(flight.contest.distance) : "N/A";
+                        
+                        row.innerHTML = `
+                            <td>${index + 1}</td>
+                            <td>${flight.user.name}</td>
+                            <td>${distance}</td>
+                            <td>${flight.scoring_date}</td>
+                        `;
+                        tableBody.appendChild(row);
+                    });
+                })
+                .catch(error => {
+                    console.error("Fehler beim Laden des Leaderboards:", error);
+                    document.getElementById('leaderboard-body').innerHTML = '<tr><td colspan="4">Leaderboard konnte nicht geladen werden.</td></tr>';
+                });
+        });
+    </script>
+</body>
+</html>
