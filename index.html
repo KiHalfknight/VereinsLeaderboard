@@ -8,117 +8,281 @@
         body { font-family: Arial, sans-serif; background-color: #f4f4f4; margin: 20px; max-width: 900px; margin: 20px auto; }
         h1, h2 { color: #333; }
         
-        /* Neuer Style für die Statistik-Boxen */
-        .stats-container {
-            display: flex;
-            gap: 20px; /* Abstand zwischen den Boxen */
-            margin-bottom: 20px;
-        }
-        .stat-box {
-            flex: 1; /* Beide Boxen gleich breit */
-            background-color: #fff;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            text-align: center;
-        }
+        .stats-container { display: flex; gap: 20px; margin-bottom: 20px; }
+        .stat-box { flex: 1; background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center; }
         .stat-box h3 { margin-top: 0; color: #0056a0; }
         .stat-box p { font-size: 2.2em; font-weight: bold; color: #333; margin: 10px 0; }
 
-        table { width: 100%; border-collapse: collapse; background-color: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        table { width: 100%; border-collapse: collapse; background-color: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-top: 15px; }
         th, td { padding: 12px; border: 1px solid #ddd; text-align: left; }
         th { background-color: #0056a0; color: white; }
         tr:nth-child(even) { background-color: #f9f9f9; }
+
+        /* Filter Buttons & Checkboxes */
+        .filter-group { margin-bottom: 10px; }
+        .filter-group button { padding: 10px 15px; border: 1px solid #0056a0; background-color: #fff; color: #0056a0; font-size: 1em; cursor: pointer; margin-right: 5px; margin-bottom: 5px; }
+        .filter-group button.active { background-color: #0056a0; color: white; }
+        .options-container { background: #fff; padding: 15px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .checkbox-wrapper { margin: 10px 0; font-size: 1.1em; display: flex; align-items: center; }
+        .checkbox-wrapper input { width: 20px; height: 20px; margin-right: 10px; cursor: pointer; }
+        .checkbox-wrapper label { cursor: pointer; color: #333; font-weight: bold; }
+
+        /* === EASTEREGG STYLES === */
+        
+        /* Das Schweinchen unten rechts */
+        #easter-pig {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            font-size: 40px;
+            cursor: pointer;
+            transition: transform 0.5s ease;
+            z-index: 1000;
+            user-select: none; /* Damit man es nicht markiert beim Klicken */
+        }
+
+        /* Die Purzelbaum-Animation */
+        .barrel-roll {
+            animation: roll 1s ease-in-out;
+        }
+        
+        @keyframes roll {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        /* Vaianas goldene Zeile */
+        tr.vaiana-row {
+            background-color: #fff8dc !important; /* Goldgelb */
+            font-weight: bold;
+            border: 2px solid gold;
+        }
+        tr.vaiana-row td:first-child {
+            font-size: 1.5em; /* Platz 1 größer */
+        }
     </style>
 </head>
 <body>
 
     <h1>🏆 Vereins-Statistik LSC Karlstadt</h1>
 
-    <div class="stats-container" id="stats-container">
-        <div class="stat-box"><h3>Lade...</h3></div>
-        <div class="stat-box"><h3>Lade...</h3></div>
+    <div class="stats-container" id="stats-container"></div>
+    
+    <h2>Leaderboard</h2>
+
+    <div class="filter-group" id="year-filter-buttons"></div>
+
+    <div class="options-container">
+        <div class="checkbox-wrapper">
+            <input type="checkbox" id="chk-club-aircraft">
+            <label for="chk-club-aircraft">Nur Vereinsmaschinen (ASK 21, LS 4, Duo Discus, DG 300)</label>
+        </div>
+        
+        <div class="checkbox-wrapper">
+            <input type="checkbox" id="chk-guests">
+            <label for="chk-guests">Auch Gäste ab Saupurzel anzeigen</label>
+        </div>
     </div>
 
-    <h2>Leaderboard (Top 20 All-Time)</h2>
+    <div class="filter-group">
+        <button id="btn-top-flights" class="active">Top Flüge</button>
+        <button id="btn-unique-pilots">Bester pro Pilot</button>
+    </div>
 
     <table>
         <thead>
             <tr>
                 <th>Rang</th>
                 <th>Pilot</th>
+                <th>Flugzeug</th>
                 <th>Distanz (km)</th>
                 <th>Datum</th>
             </tr>
         </thead>
-        <tbody id="leaderboard-body">
-            </tbody>
+        <tbody id="leaderboard-body"></tbody>
     </table>
 
+    <div id="easter-pig" title="Klick mich!">🐷</div>
+
     <script>
-        // HILFSFUNKTION: Formatiert 12345 zu "12.345"
-        function formatNumber(num) {
-            return new Intl.NumberFormat('de-DE').format(num);
+        // --- KONFIGURATION ---
+        const currentFilters = { year: 'all', mode: 'top', aircraft: 'all', guests: 'false' };
+        let cachedData = null;
+        
+        // --- EASTEREGG ZUSTAND ---
+        let vaianaActive = false; // Ist Vaiana gerade sichtbar?
+
+        function formatNumber(num) { return new Intl.NumberFormat('de-DE').format(num); }
+
+        function drawStats(stats) {
+            const statsContainer = document.getElementById('stats-container');
+            const yearLabel = (currentFilters.year === 'all') ? 'All-Time' : currentFilters.year;
+            statsContainer.innerHTML = `
+                <div class="stat-box">
+                    <h3>Gesamt-Kilometer (${yearLabel})</h3>
+                    <p>${formatNumber(stats.totalDistance)} km</p>
+                    <span>(Aus ${formatNumber(stats.totalFlights)} Flügen)</span>
+                </div>
+            `;
         }
 
-        // Warte, bis die ganze Seite geladen ist
-        document.addEventListener('DOMContentLoaded', () => {
+        function drawLeaderboard() {
+            if (!cachedData) return;
+            const tableBody = document.getElementById('leaderboard-body');
+            tableBody.innerHTML = '';
             
-            // -----------------------------------------
-            // 1. STATISTIKEN LADEN (NEU)
-            // -----------------------------------------
-            fetch('/api/stats')
-                .then(response => response.json())
-                .then(stats => {
-                    // 'stats' ist das Objekt: { allTime: 50000, currentYear: 12000, totalFlights: 150 }
-                    const statsContainer = document.getElementById('stats-container');
-                    
-                    // Das aktuelle Jahr für die Überschrift holen
-                    const currentYear = new Date().getFullYear(); 
-                    
-                    statsContainer.innerHTML = `
-                        <div class="stat-box">
-                            <h3>Gesamt-Kilometer (All-Time)</h3>
-                            <p>${formatNumber(stats.allTime)} km</p>
-                            <span>(Aus ${formatNumber(stats.totalFlights)} Flügen)</span>
-                        </div>
-                        <div class="stat-box">
-                            <h3>Gesamt-Kilometer (${currentYear})</h3>
-                            <p>${formatNumber(stats.currentYear)} km</p>
-                        </div>
-                    `;
-                })
-                .catch(error => {
-                    console.error("Fehler beim Laden der Stats:", error);
-                    document.getElementById('stats-container').innerHTML = '<p>Statistiken konnten nicht geladen werden.</p>';
-                });
+            // 1. Echte Daten holen
+            let flights = (currentFilters.mode === 'top') 
+                ? cachedData.leaderboardTopFlights 
+                : cachedData.leaderboardUniquePilots;
 
-            // -----------------------------------------
-            // 2. LEADERBOARD LADEN (Wie gehabt)
-            // -----------------------------------------
-            fetch('/api/leaderboard')
-                .then(response => response.json())
-                .then(flights => { 
-                    const tableBody = document.getElementById('leaderboard-body');
-                    tableBody.innerHTML = ''; // Leere die Tabelle (falls da "Lade..." drin stünde)
+            // Kopie erstellen, damit wir das Original nicht verändern
+            flights = [...flights];
 
-                    flights.forEach((flight, index) => {
-                        const row = document.createElement('tr');
-                        const distance = flight.contest ? Math.round(flight.contest.distance) : "N/A";
-                        
-                        row.innerHTML = `
-                            <td>${index + 1}</td>
-                            <td>${flight.user.name}</td>
-                            <td>${distance}</td>
-                            <td>${flight.scoring_date}</td>
-                        `;
-                        tableBody.appendChild(row);
-                    });
-                })
-                .catch(error => {
-                    console.error("Fehler beim Laden des Leaderboards:", error);
-                    document.getElementById('leaderboard-body').innerHTML = '<tr><td colspan="4">Leaderboard konnte nicht geladen werden.</td></tr>';
-                });
+            // 2. EASTEREGG LOGIK: Vaiana einfügen?
+            if (vaianaActive) {
+                // Fake-Flug Objekt für Vaiana
+                const vaianaFlight = {
+                    user: { name: "Vaiana (The Boss) 🐕" },
+                    aircraft: { name: "Leckerli-Bomber" }, // Witziges Flugzeug
+                    contest: { distance: 99999 },          // Unschlagbare Distanz
+                    scoring_date: "Jeden Tag",
+                    isVaiana: true                         // Markierung für Styling
+                };
+                // Füge Vaiana GANZ OBEN ein (Index 0)
+                flights.unshift(vaianaFlight);
+            }
+
+            if (flights.length === 0) {
+                tableBody.innerHTML = '<tr><td colspan="5" style="text-align: center;">Keine Flüge mit diesen Filtern gefunden.</td></tr>';
+                return;
+            }
+
+            // 3. Tabelle zeichnen
+            flights.forEach((flight, index) => {
+                const row = document.createElement('tr');
+                
+                // Spezielles Styling für Vaiana
+                if (flight.isVaiana) {
+                    row.classList.add('vaiana-row');
+                }
+
+                const distance = flight.contest ? Math.round(flight.contest.distance) : "N/A";
+                const aircraftName = flight.aircraft ? flight.aircraft.name : "-";
+                
+                // Gast-Markierung (Logik: Wenn Club existiert und ID != 526)
+                let pilotName = flight.user.name;
+                const isGuest = flight.club && flight.club.id !== 526;
+                if (isGuest && !flight.isVaiana) {
+                    pilotName += " (Gast)";
+                }
+
+                row.innerHTML = `
+                    <td>${index + 1}</td> <td>${pilotName}</td>
+                    <td>${aircraftName}</td>
+                    <td>${distance}</td>
+                    <td>${flight.scoring_date}</td>
+                `;
+                tableBody.appendChild(row);
+            });
+        }
+        
+        function buildYearButtons(years) {
+            const container = document.getElementById('year-filter-buttons');
+            container.innerHTML = '';
+            
+            const btnAll = document.createElement('button');
+            btnAll.innerText = 'Gesamt';
+            btnAll.dataset.year = 'all';
+            btnAll.classList.add('active');
+            container.appendChild(btnAll);
+            
+            years.forEach(year => {
+                const btnYear = document.createElement('button');
+                btnYear.innerText = year;
+                btnYear.dataset.year = year;
+                container.appendChild(btnYear);
+            });
+            
+            container.addEventListener('click', (event) => {
+                if (event.target.tagName === 'BUTTON') {
+                    currentFilters.year = event.target.dataset.year;
+                    container.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
+                    event.target.classList.add('active');
+                    loadDataAndDraw();
+                }
+            });
+        }
+
+        async function loadDataAndDraw() {
+            const url = `/api/data?year=${currentFilters.year}&aircraft=${currentFilters.aircraft}&guests=${currentFilters.guests}`;
+            try {
+                const response = await fetch(url);
+                const { data, availableYears } = await response.json();
+                cachedData = data; 
+
+                if (document.getElementById('year-filter-buttons').childElementCount === 0) {
+                    buildYearButtons(availableYears);
+                }
+                drawStats(cachedData.stats);
+                drawLeaderboard(); // Zeichnet jetzt inkl. Vaiana (falls aktiv)
+            } catch (error) {
+                console.error("Fehler:", error);
+            }
+        }
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            // Buttons
+            const btnTop = document.getElementById('btn-top-flights');
+            const btnUnique = document.getElementById('btn-unique-pilots');
+            const chkClub = document.getElementById('chk-club-aircraft');
+            const chkGuests = document.getElementById('chk-guests');
+            
+            // --- EASTEREGG EVENT LISTENER ---
+            const pig = document.getElementById('easter-pig');
+            
+            pig.addEventListener('click', () => {
+                // 1. Animation abspielen
+                pig.classList.add('barrel-roll');
+                
+                // Animation-Klasse entfernen, sobald sie fertig ist (nach 1s), damit sie wiederholbar ist
+                setTimeout(() => {
+                    pig.classList.remove('barrel-roll');
+                }, 1000);
+
+                // 2. Vaiana Modus umschalten
+                vaianaActive = !vaianaActive; // An oder Aus schalten
+                
+                // 3. Tabelle neu zeichnen (ohne Netzwerk-Request!)
+                drawLeaderboard();
+            });
+            // --------------------------------
+
+            btnTop.addEventListener('click', () => {
+                currentFilters.mode = 'top';
+                btnTop.classList.add('active');
+                btnUnique.classList.remove('active');
+                drawLeaderboard();
+            });
+
+            btnUnique.addEventListener('click', () => {
+                currentFilters.mode = 'unique';
+                btnUnique.classList.add('active');
+                btnTop.classList.remove('active');
+                drawLeaderboard();
+            });
+
+            chkClub.addEventListener('change', (event) => {
+                currentFilters.aircraft = event.target.checked ? 'club' : 'all';
+                loadDataAndDraw();
+            });
+
+            chkGuests.addEventListener('change', (event) => {
+                currentFilters.guests = event.target.checked ? 'true' : 'false';
+                loadDataAndDraw();
+            });
+
+            loadDataAndDraw();
         });
     </script>
 </body>

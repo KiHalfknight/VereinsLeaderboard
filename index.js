@@ -1,4 +1,4 @@
-// index.js (Version 5 - Mit Statistik-Berechnung)
+// index.js (Version 9 - Mit Gäste-Filter/Saupurzel)
 
 const express = require('express');
 const path = require('path');
@@ -6,154 +6,203 @@ const app = express();
 const port = 3000;
 
 // ----------------------------------------------------
-// 1. DATENBESCHAFFUNG (MIT PAGINATION)
+// 1. KONFIGURATION
 // ----------------------------------------------------
-async function fetchAllFlights() {
-  console.log("Starte Abruf ALLER Flüge (Pagination)...");
-  
-  const clubId = "526";
+const CLUB_ID = "526";      // LSC Karlstadt
+const AIRPORT_ID = "152581"; // Karlstadt-Saupurzel
+const CLUB_AIRCRAFT = ["ASK 21", "LS 4", "Duo Discus", "DG 300"];
+
+// ----------------------------------------------------
+// 2. DATENBESCHAFFUNG (GENERIC)
+// ----------------------------------------------------
+// Diese Funktion ist jetzt schlau genug, um Verein ODER Flugplatz zu laden
+async function fetchFlightsFromWeGlide(queryParam) {
   const baseUrl = "https://api.weglide.org";
-  const limit = 100; // Wie viele Flüge pro API-Aufruf (max. 100 laut Doku)
-  let skip = 0;       // Start bei 0
-  let allFlights = [];
+  const limit = 100;
+  let skip = 0;
+  let collectedFlights = [];
   let keepFetching = true;
 
+  console.log(`Starte Abruf für Parameter: ${queryParam}...`);
+
   while (keepFetching) {
-    const targetUrl = `${baseUrl}/v1/flight?club_id_in=${clubId}&limit=${limit}&skip=${skip}`;
+    // Wir bauen die URL dynamisch basierend auf dem Parameter (club_id_in oder airport_id_in)
+    const targetUrl = `${baseUrl}/v1/flight?${queryParam}&limit=${limit}&skip=${skip}`;
     
     try {
       const response = await fetch(targetUrl);
       if (!response.ok) {
-        console.error(`API-Fehler: ${response.statusText}`);
-        keepFetching = false; // Stopp bei Fehler
-        break; // Verlasse die Schleife
+        console.error(`API-Fehler bei ${queryParam}: ${response.statusText}`);
+        keepFetching = false;
+        break;
       }
       
       const flightPage = await response.json();
       
       if (flightPage.length > 0) {
-        // Füge die Flüge dieser "Seite" zur Gesamtliste hinzu
-        allFlights = allFlights.concat(flightPage);
-        skip += limit; // Setze 'skip' für die nächste Seite hoch
-        console.log(`  ... ${allFlights.length} Flüge geladen`);
+        collectedFlights = collectedFlights.concat(flightPage);
+        skip += limit;
+        // Kleines Log, damit man sieht, dass was passiert
+        if (collectedFlights.length % 500 === 0) console.log(`  ... ${collectedFlights.length} geladen`);
       } else {
-        // Die API hat eine leere Liste zurückgegeben -> wir sind fertig
         keepFetching = false;
       }
       
     } catch (error) {
-      console.error("Netzwerkfehler beim Holen der Seiten:", error.message);
+      console.error("Netzwerkfehler:", error.message);
       keepFetching = false;
     }
   }
   
-  console.log(`Abruf beendet. Gesamt: ${allFlights.length} Flüge.`);
-  return allFlights;
+  console.log(`Abruf für ${queryParam} beendet. ${collectedFlights.length} Flüge.`);
+  return collectedFlights;
 }
 
 // ----------------------------------------------------
-// 2. STATISTIK-BERECHNUNG
+// 3. HAUPT-LOGIK (ZUSAMMENFÜHREN & FILTERN)
 // ----------------------------------------------------
-function calculateStatistics(allFlights) {
-  let totalDistanceAllTime = 0;
-  let totalDistanceCurrentYear = 0;
+function processFlightData(cache, filters) {
   
-  // Das aktuelle Jahr holen (z.B. 2025)
-  const currentYear = new Date().getFullYear(); 
+  // SCHRITT 1: BASIS-DATEN WÄHLEN
+  // Wir benutzen eine Map, um Duplikate automatisch zu verhindern (Key = Flight ID)
+  const flightsMap = new Map();
 
-  allFlights.forEach(flight => {
-    // Prüfen, ob der Flug überhaupt eine 'contest' Eigenschaft hat
-    if (flight.contest && flight.contest.distance) {
-      const distance = flight.contest.distance;
-      
-      // 1. All-Time Summe
-      totalDistanceAllTime += distance;
-      
-      // 2. Jahres-Summe
-      // Vergleiche das Jahr des Flugs (z.B. "2020-07-12") mit dem aktuellen Jahr
+  // A) Immer die Vereinsflüge hinzufügen
+  cache.clubFlights.forEach(flight => flightsMap.set(flight.id, flight));
+
+  // B) Wenn "Gäste" (Saupurzel) gewünscht sind, diese AUCH hinzufügen
+  // filters.guests kommt als String 'true' oder 'false' vom Frontend
+  if (filters.guests === 'true') {
+    cache.airportFlights.forEach(flight => flightsMap.set(flight.id, flight));
+  }
+
+  // Jetzt haben wir eine saubere Liste ohne Doppelte
+  let filteredFlights = Array.from(flightsMap.values());
+
+  
+  // SCHRITT 2: FILTER ANWENDEN
+
+  // A) Jahres-Filter
+  if (filters.year && filters.year !== 'all') {
+    const yearToFilter = parseInt(filters.year);
+    filteredFlights = filteredFlights.filter(flight => {
       const flightYear = parseInt(flight.scoring_date.substring(0, 4));
-      if (flightYear === currentYear) {
-        totalDistanceCurrentYear += distance;
-      }
+      return flightYear === yearToFilter;
+    });
+  }
+
+  // B) Vereinsmaschinen-Filter
+  // ACHTUNG: Das filtert jetzt auch die Gäste! 
+  // Wenn ein Gast mit einer "LS 4" kommt, wird er angezeigt. 
+  // Wenn er mit einer "Ventus 3" kommt, fliegt er raus. Das ist logisch korrekt für den Filter.
+  if (filters.aircraft === 'club') {
+    filteredFlights = filteredFlights.filter(flight => {
+      const aircraftName = flight.aircraft ? flight.aircraft.name : "";
+      return CLUB_AIRCRAFT.includes(aircraftName);
+    });
+  }
+  
+  // ----- BERECHNUNGEN (wie gehabt) -----
+  
+  let totalDistance = 0;
+  filteredFlights.forEach(flight => {
+    if (flight.contest && flight.contest.distance) {
+      totalDistance += flight.contest.distance;
     }
   });
+  
+  const stats = {
+    totalDistance: Math.round(totalDistance),
+    totalFlights: filteredFlights.length
+  };
+  
+  // Leaderboard 1: Top Flüge
+  const leaderboardTopFlights = [...filteredFlights]
+    .sort((a, b) => (b.contest?.distance || 0) - (a.contest?.distance || 0))
+    .slice(0, 20);
 
-  // Runde die Zahlen und gib sie als Objekt zurück
+  // Leaderboard 2: Bester pro Pilot
+  const pilotBestFlight = new Map();
+  filteredFlights.forEach(flight => {
+    const pilotId = flight.user.id;
+    const currentDistance = flight.contest?.distance || 0;
+    if (!pilotBestFlight.has(pilotId) || currentDistance > (pilotBestFlight.get(pilotId).contest?.distance || 0)) {
+      pilotBestFlight.set(pilotId, flight);
+    }
+  });
+  
+  const leaderboardUniquePilots = Array.from(pilotBestFlight.values())
+    .sort((a, b) => (b.contest?.distance || 0) - (a.contest?.distance || 0))
+    .slice(0, 20);
+  
   return {
-    allTime: Math.round(totalDistanceAllTime),
-    currentYear: Math.round(totalDistanceCurrentYear),
-    totalFlights: allFlights.length
+    stats,
+    leaderboardTopFlights,
+    leaderboardUniquePilots
   };
 }
 
-
 // ----------------------------------------------------
-// 3. SERVER-ROUTEN
+// 4. CACHE & ROUTEN
 // ----------------------------------------------------
 
-// Ein "Cache", damit wir WeGlide nicht bei JEDEM Seitenaufruf neu abfragen
-// (Das ist eine fortgeschrittene, aber wichtige Technik)
 let appDataCache = {
-  leaderboard: [],
-  stats: {},
-  lastFetched: null // Zeitstempel
+  clubFlights: [],    // Liste 1: Verein
+  airportFlights: [], // Liste 2: Saupurzel (Gäste + Verein)
+  availableYears: [],
+  lastFetched: null
 };
 
-// Diese Funktion füllt unseren Cache
 async function updateCache() {
-  console.log("Aktualisiere Cache...");
-  const allFlights = await fetchAllFlights();
+  console.log("Aktualisiere Cache (Das kann kurz dauern)...");
   
-  // A) Leaderboard-Daten berechnen
-  // Sortiere alle Flüge (Kopie) nach Distanz, nimm die Top 20
-  appDataCache.leaderboard = [...allFlights] // Erstelle eine Kopie
-    .sort((a, b) => (b.contest?.distance || 0) - (a.contest?.distance || 0))
-    .slice(0, 20); // Nimm die ersten 20
-
-  // B) Statistik-Daten berechnen
-  appDataCache.stats = calculateStatistics(allFlights);
+  // Wir holen beide Listen parallel (Promise.all beschleunigt das)
+  const [clubData, airportData] = await Promise.all([
+    fetchFlightsFromWeGlide(`club_id_in=${CLUB_ID}`),
+    fetchFlightsFromWeGlide(`airport_id_in=${AIRPORT_ID}`)
+  ]);
   
+  appDataCache.clubFlights = clubData;
+  appDataCache.airportFlights = airportData;
+  
+  // Jahre berechnen (wir nehmen Jahre aus BEIDEN Listen, um sicher zu sein)
+  const years = new Set();
+  [...clubData, ...airportData].forEach(flight => {
+    years.add(flight.scoring_date.substring(0, 4));
+  });
+  
+  appDataCache.availableYears = Array.from(years).sort((a, b) => b - a);
   appDataCache.lastFetched = Date.now();
-  console.log("Cache ist aktuell.");
+  console.log(`Cache aktuell. Jahre: ${appDataCache.availableYears.join(', ')}`);
 }
 
-// HILFS-FUNKTION: Stellt sicher, dass die Daten aktuell sind (z.B. nicht älter als 1 Stunde)
 async function getFreshData() {
-  const oneHour = 60 * 60 * 1000; // 1 Stunde in Millisekunden
+  const oneHour = 60 * 60 * 1000;
   if (!appDataCache.lastFetched || (Date.now() - appDataCache.lastFetched > oneHour)) {
     await updateCache();
   }
   return appDataCache;
 }
 
-
-// ROUTE 1: Die Hauptseite ("/")
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// ROUTE 2: Der Leaderboard-Daten-Endpunkt
-app.get('/api/leaderboard', async (req, res) => {
-  console.log("Daten-Anfrage für /api/leaderboard empfangen...");
-  const data = await getFreshData();
-  res.json(data.leaderboard);
-});
-
-// NEUE ROUTE 3: Der Statistik-Daten-Endpunkt
-app.get('/api/stats', async (req, res) => {
-  console.log("Daten-Anfrage für /api/stats empfangen...");
-  const data = await getFreshData();
-  res.json(data.stats);
-});
-
-
-// ----------------------------------------------------
-// 4. SERVER START
-// ----------------------------------------------------
-app.listen(port, () => {
-  console.log(`Server läuft! Öffne http://localhost:${port} in deinem Browser.`);
+app.get('/api/data', async (req, res) => {
+  // Wir loggen jetzt auch den guests-Filter
+  console.log(`Anfrage: year=${req.query.year}, aircraft=${req.query.aircraft}, guests=${req.query.guests}`);
   
-  // Optional: Fülle den Cache direkt beim Start, 
-  // damit der erste Aufruf der Seite sofort schnell ist.
+  const cache = await getFreshData();
+  const processedData = processFlightData(cache, req.query);
+  
+  res.json({
+    data: processedData,
+    availableYears: cache.availableYears
+  });
+});
+
+app.listen(port, () => {
+  console.log(`Server läuft! Öffne http://localhost:${port}`);
+  // Initialer Cache-Aufruf
   updateCache();
 });
